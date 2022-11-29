@@ -72,7 +72,7 @@ namespace NbtStudio.UI
             }
         }
 
-        private List<INode> DoSearchAll(IProgress<TreeSearchReport> progress)
+        private async Task<List<INode>> DoSearchAll(IProgress<TreeSearchReport> progress)
         {
             if (!ValidateRegex()) return null;
             var predicate = GetPredicate();
@@ -81,49 +81,41 @@ namespace NbtStudio.UI
         }
 
         private readonly CancellationTokenSource CancelSource = new CancellationTokenSource();
-        private Task<IEnumerable<INode>> ActiveSearch;
-        private void StartActiveSearch(Func<IProgress<TreeSearchReport>, List<INode>> function)
+        
+        private async Task StartActiveSearch(Func<IProgress<TreeSearchReport>, Task<List<INode>>> search)
         {
-            if (ActiveSearch is not null && !ActiveSearch.IsCompleted)
-                return;
-            var progress = new Progress<TreeSearchReport>();
+            Progress<TreeSearchReport> progress = new Progress<TreeSearchReport>();
             progress.ProgressChanged += Progress_ProgressChanged;
-            ActiveSearch = new Task<IEnumerable<INode>>(() => function(progress));
-            ActiveSearch.Start();
             ProgressBar.Visible = true;
             FoundResultsLabel.Visible = false;
             ProgressBar.Value = 0;
-            ActiveSearch.ContinueWith(x =>
-            {
-                ProgressBar.Visible = false;
-                if (x.Result is null || !x.Result.Any())
-                {
-                    FoundResultsLabel.Text = "No results found";
-                    FoundResultsLabel.Visible = true;
+
+            List<INode> results = await search(progress);
+            ProgressBar.Visible = false;
+            if (results == null || results.Count == 0) {
+                FoundResultsLabel.Text = "No results found";
+                FoundResultsLabel.Visible = true;
+                return;
+            }
+
+            if (results.Count > 1) {
+                FoundResultsLabel.Text = $"Found {results.Count} matching results";
+                FoundResultsLabel.Visible = true;
+            }
+
+            SearchingView.ClearSelection();
+            LastFound = results.Last();
+            foreach (INode item in results) {
+                TreeNodeAdv node = SearchingView.FindNode(item.Path, true);
+                if (node is not null) {
+                    FastEnsureVisible(node);
+                    node.IsSelected = true;
                 }
-                else
-                {
-                    if (x.Result.CountGreaterThan(1))
-                    {
-                        FoundResultsLabel.Text = $"Found {x.Result.Count()} matching results";
-                        FoundResultsLabel.Visible = true;
-                    }
-                    SearchingView.ClearSelection();
-                    LastFound = x.Result.Last();
-                    foreach (var item in x.Result)
-                    {
-                        var node = SearchingView.FindNode(item.Path, true);
-                        if (node is not null)
-                        {
-                            FastEnsureVisible(node);
-                            node.IsSelected = true;
-                        }
-                    }
-                    var scroll = SearchingView.FindNode(LastFound.Path, true);
-                    if (scroll is not null)
-                        SearchingView.ScrollTo(scroll);
-                }
-            }, TaskScheduler.FromCurrentSynchronizationContext());
+            }
+            TreeNodeAdv scroll = SearchingView.FindNode(LastFound.Path, true);
+            if (scroll is not null) {
+                SearchingView.ScrollTo(scroll);
+            }
         }
 
         private void Progress_ProgressChanged(object sender, TreeSearchReport e)
@@ -144,7 +136,7 @@ namespace NbtStudio.UI
 
         public void Search(SearchDirection direction)
         {
-            List<INode> ItemOrNull(INode item)
+            async Task<List<INode>> ItemOrNull(INode item)
             {
                 if (item is null)
                     return null;
@@ -252,7 +244,6 @@ namespace NbtStudio.UI
             SearchingModel = null;
             SearchingView = null;
             CancelSource.Cancel();
-            ActiveSearch = null;
             base.Dispose(disposing);
         }
     }
